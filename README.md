@@ -3,12 +3,13 @@ Java NIO Selector Playground
 
 to build
 
-> mvn clean package
+    mvn clean package
 
-run
+to run
 
-java -cp target/selectorfun.jar com.logicalpractice.selectorfun.BroadcastServer
+    java -cp target/selectorfun.jar com.logicalpractice.selectorfun.BroadcastServer
 
 or
 
-java -cp target/selectorfun.jar com.logicalpractice.selectorfun.QueueServer
+    java -cp target/selectorfun.jar com.logicalpractice.selectorfun.QueueServer
+
