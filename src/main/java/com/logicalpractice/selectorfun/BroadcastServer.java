@@ -19,127 +19,85 @@ import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 
 /**
+ * Simple Broadcast server.
  *
+ * <p>Opens a ServerSocket on 2001.</p>
+ *
+ * <ol>
+ * <li>And client that attaches will be sent a copy of the messages generated from the console.</li>
+ * <li>Any input from the clients will be read and printed to the console line by line</li>
+ * </ol>
+ *
+ * <p>The internal state of the connection is maintained with via an instance of ConnectionState attached to
+ * each SelectionKey. Messages to broadcast are postted to the BlockingQueue and the Selector is woken up</p>
  */
 public class BroadcastServer {
 
-    private static final Charset UTF8 = Charset.forName("UTF-8");
+   private static final Charset UTF8 = Charset.forName("UTF-8");
 
-    private final Logger logger = LoggerFactory.getLogger(BroadcastServer.class);
+   private final Logger logger = LoggerFactory.getLogger(BroadcastServer.class);
 
-    private final Selector selector;
+   private final Selector selector;
 
-    private final BlockingQueue<byte[]> messages = new ArrayBlockingQueue<byte[]>(16);
+   private final BlockingQueue<byte[]> messages = new ArrayBlockingQueue<byte[]>(16);
 
-    private volatile boolean stopping ;
+   private volatile boolean stopping ;
 
-    private Thread thread;
+   private Thread thread;
 
-    public BroadcastServer() {
-        try {
-            selector = Selector.open();
-        } catch (IOException e) {
-            throw new IllegalStateException(e);
-        }
-    }
+   public BroadcastServer() {
+      try {
+         selector = Selector.open();
+      } catch (IOException e) {
+         throw new IllegalStateException(e);
+      }
+   }
 
-    private void go() throws IOException {
+   private void go() throws IOException {
 
-        ServerSocketChannel ssc = ServerSocketChannel.open();
+      ServerSocketChannel ssc = ServerSocketChannel.open();
 
-        ssc.configureBlocking(false);
-        ssc.bind(new InetSocketAddress(2001));
+      ssc.configureBlocking(false);
+      ssc.bind(new InetSocketAddress(2001));
 
-        SelectionKey serverKey = ssc.register(selector, SelectionKey.OP_ACCEPT );
+      SelectionKey serverKey = ssc.register(selector, SelectionKey.OP_ACCEPT );
 
-        logger.info("listening on port 2001");
-        while(!stopping){
-            selector.select();
+      logger.info("listening on port 2001");
+      while(!stopping){
+         selector.select();
 
-            Iterator<SelectionKey> it = selector.selectedKeys().iterator();
-            while(it.hasNext()){
-                SelectionKey selectionKey = it.next();
-                it.remove();
-                if( selectionKey.isAcceptable() ){
-                    SocketChannel newClient = ssc.accept();
-                    newClient.configureBlocking(false);
-                    newClient.register(selector, SelectionKey.OP_READ, new ConnectionState());
-                    logger.info("New client connected");
-                }
-                if( selectionKey.isValid() && selectionKey.isWritable() ){
+         Iterator<SelectionKey> it = selector.selectedKeys().iterator();
+         while(it.hasNext()){
+            SelectionKey selectionKey = it.next();
+            it.remove();
+            if( selectionKey.isAcceptable() ){
+               SocketChannel newClient = ssc.accept();
+               newClient.configureBlocking(false);
+               newClient.register(selector, SelectionKey.OP_READ, new ConnectionState());
+               logger.info("New client connected");
+            }
+            if( selectionKey.isValid() && selectionKey.isWritable() ){
 //                    logger.info("Writable()");
-                    writeAttached(selectionKey);
-                }
-                if( selectionKey.isValid() && selectionKey.isReadable() ){
-                    readAttached(selectionKey);
-                }
+               writeAttached(selectionKey);
             }
-            byte[] message ;
-            while( (message = messages.poll()) != null) {
-                for (SelectionKey selectionKey : selector.keys()) {
-                    if( selectionKey != serverKey ){
-                        ConnectionState state = (ConnectionState) selectionKey.attachment();
-                        state.writeQueue.add(ByteBuffer.wrap(message));
-                        selectionKey.interestOps(selectionKey.interestOps() | SelectionKey.OP_WRITE); // switch on writes
-                    }
-                }
+            if( selectionKey.isValid() && selectionKey.isReadable() ){
+               readAttached(selectionKey);
             }
-        }
-        selector.close();
-        ssc.close();
-    }
-
-    private void readAttached(SelectionKey key) {
-        ConnectionState state = (ConnectionState) key.attachment();
-
-        SocketChannel socket = (SocketChannel) key.channel();
-
-        ByteBuffer readBuffer = state.readBuffer;
-
-        try {
-            int read = socket.read(readBuffer);
-            if( read == -1 ){
-                logger.info("EOF - disconnecting");
-                key.cancel();
-                return ;
+         }
+         byte[] message ;
+         while( (message = messages.poll()) != null) {
+            for (SelectionKey selectionKey : selector.keys()) {
+               if( selectionKey != serverKey ){
+                  ConnectionState state = (ConnectionState) selectionKey.attachment();
+                  state.writeQueue.add(ByteBuffer.wrap(message));
+                  selectionKey.interestOps(selectionKey.interestOps() | SelectionKey.OP_WRITE); // switch on writes
+               }
             }
-
-            if( read == 0 ){
-                return;
-            }
-
-            readBuffer.flip();
-            int limit = readBuffer.limit();
-            logger.info("Scanning {} bytes", limit);
-
-            ByteBuffer command = ByteBuffer.allocate(limit);
-
-            int endOfLastCommand = 0;
-            for( int i = 0; i < limit; i ++ ){
-                byte b = readBuffer.get();
-                if( b == '\n' ){
-                    // end of command
-                    command.flip();
-                    logger.info("Complete message from client, [{}]", new String(command.array(),Charset.defaultCharset()));
-                    command.clear(); // put it back
-                    endOfLastCommand = i;
-                } else {
-                    command.put(b);
-                }
-            }
-            readBuffer.clear(); // have to clear cos we flipped it
-
-            if( endOfLastCommand > 0 && endOfLastCommand != (limit - 1) ) {
-                readBuffer.position(endOfLastCommand + 1);
-                readBuffer.compact();
-                readBuffer.position(limit - endOfLastCommand);
-            }
-
-        } catch (IOException e) {
-            logger.info("IOException [{}] - disconnecting", e.getMessage());
-            key.cancel();
-        }
-    }
+         }
+      }
+      selector.close();
+      ssc.close();
+   }
 
     private void writeAttached(SelectionKey key) throws IOException {
         ConnectionState state = (ConnectionState) key.attachment();
@@ -167,6 +125,58 @@ public class BroadcastServer {
             state.writeQueue.remove();
         }
     }
+
+   private void readAttached(SelectionKey key) {
+      ConnectionState state = (ConnectionState) key.attachment();
+
+      SocketChannel socket = (SocketChannel) key.channel();
+
+      ByteBuffer readBuffer = state.readBuffer;
+
+      try {
+         int read = socket.read(readBuffer);
+         if( read == -1 ){
+            logger.info("EOF - disconnecting");
+            key.cancel();
+            return ;
+         }
+
+         if( read == 0 ){
+            return;
+         }
+
+         readBuffer.flip();
+         int limit = readBuffer.limit();
+         logger.info("Scanning {} bytes", limit);
+
+         ByteBuffer command = ByteBuffer.allocate(limit);
+
+         int endOfLastCommand = 0;
+         for( int i = 0; i < limit; i ++ ){
+            byte b = readBuffer.get();
+            if( b == '\n' ){
+               // end of command
+               command.flip();
+               logger.info("Complete message from client, [{}]", new String(command.array(),Charset.defaultCharset()));
+               command.clear(); // put it back
+               endOfLastCommand = i;
+            } else {
+               command.put(b);
+            }
+         }
+         readBuffer.clear(); // have to clear cos we flipped it
+
+         if( endOfLastCommand > 0 && endOfLastCommand != (limit - 1) ) {
+            readBuffer.position(endOfLastCommand + 1);
+            readBuffer.compact();
+            readBuffer.position(limit - endOfLastCommand);
+         }
+
+      } catch (IOException e) {
+         logger.info("IOException [{}] - disconnecting", e.getMessage());
+         key.cancel();
+      }
+   }
 
     public synchronized void start(){
         if( this.thread != null ){
@@ -231,9 +241,10 @@ public class BroadcastServer {
     private void printSummary() {
         System.out.println("number of clients : " + (selector.keys().size() - 1));
     }
-}
 
-final class ConnectionState {
-    final Queue<ByteBuffer> writeQueue = new LinkedList<ByteBuffer>();
-    ByteBuffer readBuffer = ByteBuffer.allocate(1024) ;
+    static final class ConnectionState {
+        final Queue<ByteBuffer> writeQueue = new LinkedList<ByteBuffer>();
+        ByteBuffer readBuffer = ByteBuffer.allocate(1024) ;
+    }
+
 }
